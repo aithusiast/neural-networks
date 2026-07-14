@@ -26,10 +26,10 @@ class NeuralNetwork:
     def __init__(
             self,
             architecture: list[int],
-            activation: list[str] | str,
+            activation: list[str],
+            batch_size: int,
             alpha: float = 0.01,
-            epochs: int = 1000,
-            batch_size: int | None = None,
+            epochs: int = 1000
 
     ):
         # check for input
@@ -61,12 +61,16 @@ class NeuralNetwork:
             loss_func: str
     ):
         X, y = self.check_input(X, y)
-        if loss_func not in ['mse', 'entropy']:
-            raise ValueError(f"Invalid loss function, expected ['mse', 'entropy'], got {loss_func}!")
+        if loss_func not in ['mse', 'cross_entropy']:
+            raise ValueError(f"Invalid loss function, expected ['mse', 'cross_entropy'], got {loss_func}!")
         
         self.build_network(X, y, loss_func)
 
         return self
+    
+    def predict(self, X: np.ndarray):
+        predictions, _ = self.forward(X)
+        return predictions
     
     # ____ Internal Methods ______________________________________________________________________________
     def forward(self, X: np.ndarray):
@@ -88,7 +92,7 @@ class NeuralNetwork:
             n_inputs = self.architecture[i]
             n_neurons = self.architecture[i+1]
             
-            if self.activation[i] == 'Relu':
+            if self.activation[i] == 'relu':
                 weights = np.random.randn(n_neurons, n_inputs) * np.sqrt(2 / n_inputs)
             else:
                 weights = np.random.randn(n_neurons, n_inputs) * np.sqrt(1 / n_inputs)
@@ -124,11 +128,12 @@ class NeuralNetwork:
         self.loss_history = []
         for _ in range(self.epochs):
             indices = np.random.permutation(len(X))
-            X = X[indices]
-            y = y[indices]
+            X_shuffled = X[indices]
+            y_shuffled = y[indices]
+
             for i in range(0, len(X), self.batch_size):
-                X_batch = X[i: i+self.batch_size]
-                y_batch = y[i: i+self.batch_size]
+                X_batch = X_shuffled[i: i+self.batch_size]
+                y_batch = y_shuffled[i: i+self.batch_size]
                 predictions, cache = self.forward(X_batch)
                 match loss_func:
                     case "mse":
