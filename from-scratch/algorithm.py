@@ -1,41 +1,26 @@
 import numpy as np
-from typing import Optional
+from dataclasses import dataclass
 
+# ____ Data Classes ______________________________________________________________________________
+@dataclass
+class Parameters:
+    weights: np.ndarray
+    biases: np.ndarray
 
-class RegressionNeuralNetwork:
-    def __init__(
-            self,
-            architecture: list[int],
-            activation: list[str] | str,
-            alpha: float = 0.01,
-            epochs: int = 1000,
-            batch_size: int | None = None,
+@dataclass
+class Cache:
+    Z : np.ndarray
+    A : np.ndarray
 
-    ):
-        # check for input
-        if not isinstance(architecture, list):
-            raise ValueError("The architecture must be a list of neurons per each layer!")
-        
-        if isinstance(activation, list):
-            if len(architecture) != len(activation):
-                raise ValueError("Architecture and Activation must have the same length, an activation function per each layer!")
-            
-            if not np.all(np.isin(activation, ['relu', 'sigmoid', 'softplus'])):
-                raise ValueError(f"Invalid activation functions, expected : ['relu', 'sigmoid', 'softplus'], got {np.unique(activation)}!")
-            
-        #elif isinstance(activation, str) and (activation not in ['relu', 'sigmoid', 'softplus']):
-            #raise ValueError(f"Invalid activation functions, expected : ['relu', 'sigmoid', 'softplus'], got {activation}!")
-        
-        else:
-            raise ValueError('Activation must be a string or a list of strings!')
-
-        self.activation = activation
-        self.alpha = alpha
-        self.epochs = epochs
-        self.batch_size = batch_size
-        self.architecture = architecture
-
-        self.network = None
+# ____ Activation Functions ______________________________________________________________________________
+ACTIVATIONS = {
+        'relu': (lambda Z: np.maximum(0, Z),
+                 lambda Z: (Z > 0).astype(int)),
+        'sigmoid': (lambda Z: 1 / (1 + np.exp(-Z)),
+                    lambda Z: (S := 1 / (1 + np.exp(-Z))) * (1 - S)),
+        'softplus': (lambda Z: np.log(1 + np.exp(Z)),
+                     lambda Z: 1 / (1 + np.exp(-Z)))
+    }
 
 class NeuralNetwork:
     def __init__(
@@ -57,12 +42,9 @@ class NeuralNetwork:
             
             if not np.all(np.isin(activation, ['relu', 'sigmoid', 'softplus'])):
                 raise ValueError(f"Invalid activation functions, expected : ['relu', 'sigmoid', 'softplus'], got {np.unique(activation)}!")
-            
-        #elif isinstance(activation, str) and (activation not in ['relu', 'sigmoid', 'softplus']):
-            #raise ValueError(f"Invalid activation functions, expected : ['relu', 'sigmoid', 'softplus'], got {activation}!")
         
         else:
-            raise ValueError('Activation must be a string or a list of strings!')
+            raise ValueError('Activation must be a list of strings!')
 
         self.activation = activation
         self.alpha = alpha
@@ -70,105 +52,103 @@ class NeuralNetwork:
         self.batch_size = batch_size
         self.architecture = architecture
 
-        self.network = None
-    
+        self.parameters = self.initialize_parameters()
     # ____ Public Methods ______________________________________________________________________________
     def fit(
             self,
             X: np.ndarray,
             y: np.ndarray,
-            loss: str
+            loss_func: str
     ):
         X, y = self.check_input(X, y)
-        if loss not in ['mse', 'entropy']:
-            raise ValueError(f"Invalid loss function, expected ['mse', 'entropy'], got {loss}!")
+        if loss_func not in ['mse', 'entropy']:
+            raise ValueError(f"Invalid loss function, expected ['mse', 'entropy'], got {loss_func}!")
         
-        self.network = self.build_network(X, y, loss)
+        self.build_network(X, y, loss_func)
 
         return self
     
     # ____ Internal Methods ______________________________________________________________________________
-    def forward(self, X: np.ndarray, index: int= 0):
-            if index == len(self.architecture) -1 :
-                return
+    def forward(self, X: np.ndarray):
+            cache = []
+            A_prev = X
+            for i, params in enumerate(self.parameters):
+                f, _ = ACTIVATIONS[self.activation[i]]
+                Z = A_prev @ params.weights.T + params.biases
+                A = f(Z)
+                cache.append(Cache(Z, A))
+                A_prev = A
+            return A_prev, cache
             
-            activations = {
-                'relu': self.relu,
-                'sigmoid': self.sigmoid,
-                'softplus': self.softplus
-            }
-            n_inputs = self.architecture[index]
-            n_neurons = self.architecture[index+1]
+    
+    def initialize_parameters(self):
+        params = []
 
-            weights = np.random.randn(n_neurons, n_inputs)
+        for i in range(len(self.architecture) - 1):
+            n_inputs = self.architecture[i]
+            n_neurons = self.architecture[i+1]
+            
+            if self.activation[i] == 'Relu':
+                weights = np.random.randn(n_neurons, n_inputs) * np.sqrt(2 / n_inputs)
+            else:
+                weights = np.random.randn(n_neurons, n_inputs) * np.sqrt(1 / n_inputs)
             biases = np.zeros(n_neurons)
-            y = weights @ X + biases
-            outputs = activations[self.activation[index]](y)
-            
-            next_layer = self.forward(outputs, index+1)
 
-            return Network(outputs, weights, biases, next_layer)
+            params.append(Parameters(weights, biases))
+        return params
+
+    def backward(self, X: np.ndarray, y: np.ndarray, cache: list[Cache]):
+        m = X.shape[0]
+        L = len(self.parameters)
+        delta = cache[-1].A - y
+        grads = [None] * L
+        for i in reversed(range(L)):
+            A_prev = cache[i - 1].A if i > 0 else X
+
+            dW = A_prev.T @ delta / m 
+            db = delta.mean(axis=0)
+      
+            grads[i] = (dW.T, db)
+
+            if i > 0:
+                _, f_prime = ACTIVATIONS[self.activation[i - 1]]
+                delta = (delta @ self.parameters[i].weights) * f_prime(cache[i - 1].Z)
+        return grads
     
-    def backward(self, X: np.ndarray, y: np.ndarray, loss: str):
-        pass
+    def update_parameters(self, new_params: list[np.ndarray]):
+        for params, (dw, db) in zip(self.parameters, new_params):
+            params.weights -= dw * self.alpha
+            params.biases -= db * self.alpha
     
-    def build_network(self, X: np.ndarray, y: np.ndarray, loss: str):
-        for epoch in range(self.epochs):
+    def build_network(self, X: np.ndarray, y: np.ndarray, loss_func: str):
+        self.loss_history = []
+        for _ in range(self.epochs):
             indices = np.random.permutation(len(X))
             X = X[indices]
             y = y[indices]
             for i in range(0, len(X), self.batch_size):
-                batches = X[i: i+self.batch_size]
-                match loss:
-                    case "binary_classification_cost":
-                        pass
-                    case "multi_class_classification_cost":
-                        pass
-                    case "simple_regression_cost":
-                        pass
-                    case "multi_output_regression_cost":
-                        pass
+                X_batch = X[i: i+self.batch_size]
+                y_batch = y[i: i+self.batch_size]
+                predictions, cache = self.forward(X_batch)
+                match loss_func:
+                    case "mse":
+                        loss = self.mse(y_batch, predictions).sum() / len(y_batch)
+                        self.loss_history.append(float(loss))
+                    case "cross_entropy":
+                        loss = self.cross_entropy(y_batch, predictions).sum() / len(y_batch)
+                        self.loss_history.append(float(loss))
                     case _ :
                         raise  ValueError('Invalid loss function!')
-                # backprop
-                self.backward()
-                # update
-    
-    # ____ Activation Functions ______________________________________________________________________________
-    def relu(self, X: np.ndarray):
-        X[X < 0] = 0
-        return X
-
-    def sigmoid(self, X: np.ndarray):
-        return 1 / (1 + np.exp(-X))
-
-    def softplus(self, X:np.ndarray):
-        return np.log(1 + np.exp(X))
-
-    # ____ Activation Functions Der______________________________________________________________________________
-    def d_relu(self, X: np.ndarray):
-        X[X < 0] = 0
-        X[X > 0] = 1
-        return X
-
-    def d_sigmoid(self, X: np.ndarray):
-        return self.sigmoid(X) * (1 - self.sigmoid(X))
-
-    def d_softplus(self, X: np.ndarray):
-        return self.sigmoid(X)
+                new_params = self.backward(X_batch, y_batch, cache)
+                self.update_parameters(new_params)
+                    
     
     # ____ Cost Functions ______________________________________________________________________________
-    def binary_classification_cost(self, y_true: np.ndarray, y_pred: np.ndarray):
-        return y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred)
-    
-    def multi_class_classification_cost(self, y_true: np.ndarray, y_pred: np.ndarray):
+    def cross_entropy(self, y_true: np.ndarray, y_pred: np.ndarray):
         return - np.log(y_pred[y_true == 1])
 
-    def simple_regression_cost(self, y_true: np.ndarray, y_pred: np.ndarray):
-        return (y_true - y_pred)**2
-
-    def multi_output_regression_cost(self, y_true: np.ndarray, y_pred: np.ndarray):
-        return np.sum(self.simple_regression_cost(y_true, y_pred)) / len(y_true)
+    def mse(self, y_true: np.ndarray, y_pred: np.ndarray):
+        return np.sum((y_true - y_pred)**2, axis=1) / y_true.shape[-1]
     
     # ____ Validation Methods ______________________________________________________________________________
     def check_input(self, X: np.ndarray, y: np.ndarray):
@@ -185,20 +165,14 @@ class NeuralNetwork:
         if X.shape[0] != y.shape[0]:
             raise ValueError(f"X has {X.shape[0]} samples, but y has {y.shape[0]} samples!")
         
+        if X.shape[-1] != self.architecture[0]:
+            raise ValueError(f"The input layer has {self.architecture[0]} neurons, but X has {X.shape[-1]} features")
+        
         if y.shape != (X.shape[0], self.architecture[-1]):
-            raise ValueError(f"The target feature must be of shape {(self.architecture[-1], X.shape[0])}!")
+            raise ValueError(f"The target feature must be of shape {(X.shape[0], self.architecture[-1])}!")
 
         # Checking for dtypes
         if not np.issubdtype(X.dtype, np.number) or not np.issubdtype(y.dtype, np.number):
             raise ValueError("X and y must contain numeric values!")
         
         return X, y
-    
-
-
-class Network:
-    def __init__(self, outputs, weights, biases, next_layer):
-        self.outputs = outputs
-        self.weights = weights
-        self.biases = biases
-        self.next_layer = next_layer
